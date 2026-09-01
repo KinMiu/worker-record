@@ -1,0 +1,82 @@
+buatkan issue.md berisikan:
+
+Buatkan sebuah project lengkap menggunakan Golang untuk aplikasi "CCTV Local Recording & Event Publisher Worker".
+
+=== DESKRIPSI & TUJUAN ===
+Aplikasi ini berjalan di server lokal (Debian/Ubuntu di Proxmox LXC) pada PC berspesifikasi rendah (AMD A6, 4GB RAM). Bertugas merekam stream video dari kamera CCTV lokal (RTSP) secara offline-resilient, memotong video otomatis per 5 menit (segmented MP4) menggunakan FFmpeg passthrough (-c copy), dan mem-publish event metadata rekaman yang sudah selesai ke antrean RabbitMQ di VPS.
+
+=== KEBUTUHAN & SPESIFIKASI UTAMA ===
+
+1. Konfigurasi Menggunakan Environment Variables (.env):
+   Gunakan library `github.com/joho/godotenv` untuk membaca variabel:
+   - WORKER_ID (contoh: "worker_recorder_01")
+   - API_BASE_URL (contoh: "https://api-kamera.psti-ubl.id/devices")
+   - API_KEY_HEADER (default: "x-api-key")
+   - API_AUTH_TOKEN (Token autentikasi ke REST API)
+   - RABBITMQ_URL (contoh: "amqp://guest:guest@195.35.23.135:5672/")
+   - RABBITMQ_QUEUE_NAME (default: "cctv.recordings")
+   - RECORD_STORAGE_PATH (default: "/opt/recordings/queue")
+   - SEGMENT_DURATION_SECONDS (default: 300 / 5 menit)
+   - RETRY_INTERVAL_SECONDS (default: 5)
+   - ENABLE_S3_UPLOAD (default: false - sebagai toggle fitur masa depan)
+
+2. Bootstrap Data Kamera dari REST API (Sesuai Schema Backend Device):
+   - Saat worker start/reboot, panggil endpoint GET $API_BASE_URL dengan header otentikasi.
+   - Format response JSON:
+     {
+       "message": "Success get devices data",
+       "data": [
+         {
+           "id": "836bf517-4159-4c7e-a994-f64d475c7c00",
+           "name": "Kamera Pos 1",
+           "macAddress": "F7:BC:FF:A9:F7:52",
+           "rtspEndpoint": "rtsp://lab_cam:19421076@192.168.7.25:554/stream1",
+           "mediamtxEndpoint": "rtsp://195.35.23.135:8554/lab_cam_1",
+           "latitude": -5.37954,
+           "longitude": 105.234,
+           "createdAt": "2026-08-31T15:50:52.189Z",
+           "updatedAt": "2026-09-01T16:45:33.413Z",
+           "userId": "ce0d1ba4-8a7c-439a-960b-c3f28a56f9da",
+           "user": {
+             "id": "ce0d1ba4-8a7c-439a-960b-c3f28a56f9da",
+             "name": "Super Admin",
+             "email": "admin@destroyer.local"
+           }
+         }
+       ]
+     }
+   - Jalankan proses perekam mandiri untuk setiap kamera/device yang valid (menggunakan `rtspEndpoint` atau `source_url`).
+
+3. Perekaman Segmented 5 Menit (FFmpeg Stream Copy):
+   - Tiap kamera merekam ke subfolder masing-masing: `${RECORD_STORAGE_PATH}/${deviceId}/%Y-%m-%d_%H-%M-%S.mp4`
+   - Parameter FFmpeg hemat resource (0% re-encode CPU overhead):
+     `ffmpeg -loglevel warning -rtsp_transport tcp -stimeout 5000000 -fflags +genpts+nobuffer -avoid_negative_ts make_zero -i <rtspEndpoint> -c copy -f segment -segment_time 300 -segment_format mp4 -reset_timestamps 1 -strftime 1 <output_pattern>`
+   - Tiap kamera dikelola dalam Goroutine independen dengan auto-reconnect jika kamera lokal terputus.
+
+4. Deteksi File Selesai & Kirim Event ke RabbitMQ (Sesuai Schema Backend Recording):
+   - Gunakan library `github.com/rabbitmq/amqp091-go`.
+   - Worker memantau folder rekaman kamera secara periodik. Saat 1 segmen file .mp4 dinyatakan SELESAI (ditandai dengan munculnya segmen baru yang sedang aktif ditulis FFmpeg), worker mem-publish payload JSON ke antrean RabbitMQ ($RABBITMQ_QUEUE_NAME):
+     {
+       "event": "RECORDING_COMPLETED",
+       "deviceId": "836bf517-4159-4c7e-a994-f64d475c7c00",
+       "deviceName": "Kamera Pos 1",
+       "macAddress": "F7:BC:FF:A9:F7:52",
+       "fileName": "2026-09-01_23-05-00.mp4",
+       "path": "/opt/recordings/queue/836bf517-4159-4c7e-a994-f64d475c7c00/2026-09-01_23-05-00.mp4",
+       "url": "http://195.35.23.135:9000/recordings/836bf517-4159-4c7e-a994-f64d475c7c00/2026-09-01_23-05-00.mp4",
+       "size": 48291040,
+       "duration": 300,
+       "createdAt": "2026-09-01T23:05:00.000Z"
+     }
+   - Pesan dikirim dengan mode Persistent agar tidak hilang jika RabbitMQ server restart.
+   - Sediakan placeholder fungsi upload S3 yang dapat diaktifkan jika `ENABLE_S3_UPLOAD=true`.
+
+5. Graceful Shutdown:
+   - Menangani sinyal OS (SIGINT, SIGTERM) untuk mematikan subprocess FFmpeg dan menutup koneksi RabbitMQ dengan aman tanpa merusak file video yang sedang ditulis.
+
+=== OUTPUT FILE YANG DIHARAPKAN ===
+1. `.env.example` (Template konfigurasi environment)
+2. `go.mod` (Daftar dependensi Go 1.19+)
+3. `main.go` (Kode lengkap Golang dengan modularitas, error handling, dan logging rapi)
+4. `camera-recorder.service` (File unit systemd untuk auto-start background service di Linux)
+5. Langkah singkat build dan deploy di Linux/Proxmox LXC.

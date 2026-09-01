@@ -1,0 +1,33 @@
+[Unit]
+Description=CCTV Local Recording & Event Publisher Worker (Way Kambas)
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/worker-record
+ExecStart=/opt/worker-record/worker-record
+Restart=always
+RestartSec=5s
+
+# Environment settings
+EnvironmentFile=-/opt/worker-record/.env
+
+# Resource and file descriptor limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Graceful termination (allows FFmpeg to finish flushing current MP4 segments)
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+# Logging output to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=camera-recorder
+
+[Install]
+WantedBy=multi-user.target

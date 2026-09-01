@@ -1,0 +1,24 @@
+# Binaries
+worker-record
+worker-record.exe
+worker-record-linux
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Environment variables
+.env
+.env.local
+
+# Recordings output
+/recordings/
+/queue/
+/opt/
+
+# IDE / OS files
+.DS_Store
+.idea/
+.vscode/
+*.log

@@ -14,12 +14,11 @@ import (
 	"github.com/KinMiu/worker-record/internal/publisher"
 	"github.com/KinMiu/worker-record/internal/recorder"
 	"github.com/KinMiu/worker-record/internal/uploader"
-	"github.com/KinMiu/worker-record/internal/watcher"
 )
 
 func main() {
 	log.Println("=================================================================")
-	log.Println("  CCTV Local Recording & Event Publisher Worker")
+	log.Println("  CCTV Direct Chunk Recording & Event Publisher Worker")
 	log.Println("  Way Kambas Wildlife Surveillance System (Golang)")
 	log.Println("=================================================================")
 
@@ -47,8 +46,7 @@ func main() {
 	log.Printf("[MAIN] RabbitMQ Queue     : %s", cfg.RabbitMQQueueName)
 	log.Printf("[MAIN] Record Storage Path: %s", cfg.RecordStoragePath)
 	log.Printf("[MAIN] Playback Base URL  : %s", cfg.RecordingBaseURL)
-	log.Printf("[MAIN] Segment Duration   : %d second(s) (%.1f minutes)", cfg.SegmentDurationSeconds, float64(cfg.SegmentDurationSeconds)/60.0)
-	log.Printf("[MAIN] Scan Interval      : %d second(s)", cfg.ScanIntervalSeconds)
+	log.Printf("[MAIN] Chunk Duration     : %d second(s) (%.1f minutes)", cfg.SegmentDurationSeconds, float64(cfg.SegmentDurationSeconds)/60.0)
 	log.Printf("[MAIN] Retry Interval     : %d second(s)", cfg.RetryIntervalSeconds)
 	log.Printf("[MAIN] S3 Upload Enabled  : %t", cfg.EnableS3Upload)
 	log.Printf("[MAIN] FFmpeg Path        : %s", cfg.FFmpegPath)
@@ -71,28 +69,29 @@ func main() {
 		log.Printf("[WARNING] Initial RabbitMQ connection failed: %v. (Auto-reconnect will retry in background)", err)
 	}
 
-	// 5. Initialize S3 Uploader, Recorder Manager, and File Watcher
+	// 5. Initialize S3 Uploader and Async Upload Worker Pool (4 concurrent workers, 200 queue buffer)
 	s3Uploader := uploader.NewS3Uploader(cfg)
-	recorderMgr := recorder.NewRecorderManager(cfg)
-	fileWatcher := watcher.NewFileWatcher(cfg, recorderMgr, rmqPublisher, s3Uploader)
+	uploadPool := uploader.NewUploadPool(cfg, s3Uploader, rmqPublisher, 4, 200)
 
-	// 6. Bootstrap camera devices from Central REST API
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	uploadPool.Start(rootCtx)
+
+	// 6. Initialize Recorder Manager wired to the Upload Pool
+	recorderMgr := recorder.NewRecorderManager(cfg, uploadPool)
+
+	// 7. Bootstrap camera devices from Central REST API
 	apiClient := client.NewAPIClient(cfg)
 	log.Println("[MAIN] Bootstrapping camera list from REST API...")
 	devices, err := apiClient.FetchDevices()
 	if err != nil {
 		log.Printf("[WARNING] Initial device bootstrap from REST API failed: %v. Check API_BASE_URL or connectivity.", err)
 	} else {
-		log.Printf("[MAIN] Retrieved %d device(s). Starting camera recorder processes...", len(devices))
+		log.Printf("[MAIN] Retrieved %d device(s). Starting Direct Chunk recorder loops...", len(devices))
 		recorderMgr.ReconcileDevices(devices)
 	}
 
-	// 7. Start File Watcher background goroutine
-	rootCtx, rootCancel := context.WithCancel(context.Background())
-	go fileWatcher.Start(rootCtx)
-
 	log.Println("=================================================================")
-	log.Println("  Worker initialized and running. Awaiting recordings & events...")
+	log.Println("  Worker initialized and running. Direct chunk recording active...")
 	log.Println("  Press Ctrl+C or send SIGTERM to terminate.")
 	log.Println("=================================================================")
 
@@ -103,11 +102,12 @@ func main() {
 	sig := <-shutdownSig
 	log.Printf("[MAIN] Received shutdown signal (%s). Commencing graceful shutdown...", sig.String())
 
-	// Step A: Stop file watcher loop
-	rootCancel()
-
-	// Step B: Stop all camera recording runners and wait for FFmpeg child processes to flush & exit
+	// Step A: Stop all camera recording loops (wait for in-flight FFmpeg to finalize and enqueue)
 	recorderMgr.StopAll()
+
+	// Step B: Drain and terminate upload worker pool
+	rootCancel()
+	uploadPool.DrainAndStop()
 
 	// Step C: Close RabbitMQ publisher connection
 	rmqPublisher.Close()

@@ -1,7 +1,7 @@
 package recorder
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/KinMiu/worker-record/internal/config"
 	"github.com/KinMiu/worker-record/internal/models"
+	"github.com/KinMiu/worker-record/internal/uploader"
 )
 
 type deviceRunner struct {
@@ -21,9 +22,10 @@ type deviceRunner struct {
 	cancel context.CancelFunc
 }
 
-// RecorderManager coordinates concurrent FFmpeg recording processes for active cameras.
+// RecorderManager coordinates concurrent Direct Chunk FFmpeg recording processes for active cameras.
 type RecorderManager struct {
 	cfg        *config.Config
+	uploadPool *uploader.UploadPool
 	mu         sync.RWMutex
 	runners    map[string]*deviceRunner
 	rootCtx    context.Context
@@ -31,11 +33,12 @@ type RecorderManager struct {
 	wg         sync.WaitGroup
 }
 
-// NewRecorderManager initializes a new RecorderManager.
-func NewRecorderManager(cfg *config.Config) *RecorderManager {
+// NewRecorderManager initializes a new RecorderManager wired to the async upload pool.
+func NewRecorderManager(cfg *config.Config, uploadPool *uploader.UploadPool) *RecorderManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &RecorderManager{
 		cfg:        cfg,
+		uploadPool: uploadPool,
 		runners:    make(map[string]*deviceRunner),
 		rootCtx:    ctx,
 		rootCancel: cancel,
@@ -55,7 +58,7 @@ func (rm *RecorderManager) UpsertDevice(dev models.Device) {
 	// If device is inactive or RTSP URL is missing, stop runner if active
 	if !isActive || rtspURL == "" {
 		if exists {
-			log.Printf("[RECORDER] Device %s (%s) is now inactive/missing URL. Stopping recorder...", dev.ID, dev.Name)
+			log.Printf("[RECORDER] Device %s (%s) is inactive/missing URL. Stopping recorder...", dev.ID, dev.Name)
 			existing.cancel()
 			delete(rm.runners, dev.ID)
 		}
@@ -175,107 +178,115 @@ func (rm *RecorderManager) StopAll() {
 	log.Println("[RECORDER] All camera recorders stopped cleanly.")
 }
 
-// runDeviceLoop executes the segmented FFmpeg stream copy with an automatic reconnect loop.
+// runDeviceLoop manages sequential discrete 5-minute chunk recording with zero gap and auto-reconnect.
 func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device) {
 	defer rm.wg.Done()
 
 	rtspURL := dev.GetEffectiveRTSPURL()
 	deviceStorageDir := filepath.Join(rm.cfg.RecordStoragePath, dev.ID)
-	outputPattern := filepath.Join(deviceStorageDir, "%Y-%m-%d_%H-%M-%S.mp4")
 
-	log.Printf("[RECORDER][%s] Recorder started for '%s' -> Saving segments to: %s",
-		dev.ID, dev.Name, outputPattern)
+	log.Printf("[RECORDER][%s] Direct Chunk Recorder initialized for '%s' (Chunk: %ds, Source: %s)",
+		dev.ID, dev.Name, rm.cfg.SegmentDurationSeconds, rtspURL)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[RECORDER][%s] Recorder stopped by context cancellation", dev.ID)
+			log.Printf("[RECORDER][%s] Recorder loop stopped for '%s'", dev.ID, dev.Name)
 			return
 		default:
 		}
 
-		startTime := time.Now()
-		log.Printf("[RECORDER][%s] Launching FFmpeg segmented recorder (Segment: %ds, Source: %s)...",
-			dev.ID, rm.cfg.SegmentDurationSeconds, rtspURL)
+		nowUTC := time.Now().UTC()
+		fileName := fmt.Sprintf("%s.mp4", nowUTC.Format("2006-01-02_15-04-05"))
+		filePath := filepath.Join(deviceStorageDir, fileName)
 
-		// FFmpeg pass-through segmented MP4 (-c copy, 0% CPU re-encoding overhead)
-		// with movflags=+faststart so browsers and web players can stream & play MP4 segments immediately.
+		log.Printf("[RECORDER][%s] Recording chunk '%s' for '%s' (%ds target)...",
+			dev.ID, fileName, dev.Name, rm.cfg.SegmentDurationSeconds)
+
+		// Discrete FFmpeg process for target duration (-t N) with stream-copy and faststart moov atom
 		args := []string{
+			"-y",
 			"-hide_banner",
-			"-loglevel", "info",
+			"-loglevel", "warning",
 			"-rtsp_transport", "tcp",
 			"-timeout", "15000000", // 15 seconds socket timeout in microseconds
-			"-buffer_size", "1024000", // 1MB buffer for jitter absorption
+			"-buffer_size", "1024000", // 1MB buffer
 			"-fflags", "+genpts",
 			"-flags", "+global_header",
 			"-i", rtspURL,
-			"-map", "0:v:0", // Select first video stream
-			"-map", "0:a?", // Select audio stream if available (do not fail if no audio)
-			"-c:v", "copy", // Copy video track (0% CPU re-encoding)
-			"-c:a", "copy", // Copy audio stream if present (do not fail if no audio)
+			"-t", fmt.Sprintf("%d", rm.cfg.SegmentDurationSeconds),
+			"-map", "0:v:0",
+			"-map", "0:a?",
+			"-c:v", "copy",
+			"-c:a", "copy",
 			"-avoid_negative_ts", "make_zero",
-			"-f", "segment",
-			"-segment_time", fmt.Sprintf("%d", rm.cfg.SegmentDurationSeconds),
-			"-segment_format", "mp4",
-			"-segment_format_options", "movflags=+faststart",
-			"-reset_timestamps", "1",
-			"-strftime", "1",
-			outputPattern,
+			"-movflags", "+faststart",
+			filePath,
 		}
 
 		cmd := exec.CommandContext(ctx, rm.cfg.FFmpegPath, args...)
+		var stderrBuf bytes.Buffer
+		cmd.Stderr = &stderrBuf
 
-		stderrPipe, err := cmd.StderrPipe()
-		if err != nil {
-			log.Printf("[RECORDER][%s][ERROR] Failed to obtain stderr pipe: %v", dev.ID, err)
+		startTime := time.Now()
+		err := cmd.Run()
+		recordedDuration := time.Since(startTime)
+		recordedSec := int(recordedDuration.Seconds())
+		if recordedSec < 1 {
+			recordedSec = 1
 		}
 
-		if err := cmd.Start(); err != nil {
-			log.Printf("[RECORDER][%s][ERROR] Failed to start FFmpeg: %v", dev.ID, err)
-		} else {
-			if stderrPipe != nil {
-				go func() {
-					scanner := bufio.NewScanner(stderrPipe)
-					for scanner.Scan() {
-						line := scanner.Text()
-						// Log relevant stream detection and error lines
-						if strings.Contains(line, "Stream #") ||
-							strings.Contains(line, "Opening '") ||
-							strings.Contains(line, "error") ||
-							strings.Contains(line, "Error") ||
-							strings.Contains(line, "moov atom") ||
-							strings.Contains(line, "video:") {
-							log.Printf("[FFMPEG][%s] %s", dev.Name, line)
-						}
-					}
-				}()
+		// Verify file produced on disk
+		fileInfo, statErr := os.Stat(filePath)
+		if statErr == nil && fileInfo.Size() > 1024 {
+			// Chunk is valid and finalized with moov atom: enqueue to upload pool
+			task := uploader.UploadTask{
+				DeviceID:   dev.ID,
+				DeviceName: dev.Name,
+				MacAddress: dev.MacAddress,
+				FileName:   fileName,
+				FilePath:   filePath,
+				FileSize:   fileInfo.Size(),
+				Duration:   recordedSec,
+				CreatedAt:  nowUTC,
 			}
 
-			err = cmd.Wait()
-		}
-		duration := time.Since(startTime)
-
-		if ctx.Err() != nil {
-			log.Printf("[RECORDER][%s] FFmpeg process terminated cleanly (context canceled)", dev.ID)
-			return
-		}
-
-		if err != nil {
-			log.Printf("[RECORDER][%s] FFmpeg exited with error after %v: %v",
-				dev.ID, duration.Round(time.Second), err)
+			if rm.uploadPool != nil {
+				rm.uploadPool.Enqueue(task)
+			}
 		} else {
-			log.Printf("[RECORDER][%s] FFmpeg process finished cleanly after %v", dev.ID, duration.Round(time.Second))
+			// Clean up stub if empty or corrupt
+			if statErr == nil {
+				_ = os.Remove(filePath)
+			}
 		}
 
-		// Reconnect backoff
-		retryWait := time.Duration(rm.cfg.RetryIntervalSeconds) * time.Second
-		log.Printf("[RECORDER][%s] Reconnecting camera in %v...", dev.ID, retryWait)
-
-		select {
-		case <-ctx.Done():
-			log.Printf("[RECORDER][%s] Recorder terminated during reconnect backoff", dev.ID)
+		// Handle shutdown
+		if ctx.Err() != nil {
+			log.Printf("[RECORDER][%s] Recorder context cancelled during '%s'", dev.ID, fileName)
 			return
-		case <-time.After(retryWait):
+		}
+
+		// Determine next step: immediate rollover vs reconnect backoff
+		if err != nil || recordedDuration < 10*time.Second {
+			stderrMsg := strings.TrimSpace(stderrBuf.String())
+			if stderrMsg != "" {
+				log.Printf("[RECORDER][%s][WARNING] FFmpeg error on '%s': %s", dev.ID, dev.Name, stderrMsg)
+			}
+
+			retryWait := time.Duration(rm.cfg.RetryIntervalSeconds) * time.Second
+			log.Printf("[RECORDER][%s] Camera '%s' disconnected/errored after %v. Reconnecting in %v...",
+				dev.ID, dev.Name, recordedDuration.Round(time.Second), retryWait)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(retryWait):
+			}
+		} else {
+			// Full chunk recorded cleanly: rollover to next segment immediately
+			log.Printf("[RECORDER][%s] Chunk '%s' completed successfully (%v). Rollover to next chunk...",
+				dev.ID, fileName, recordedDuration.Round(time.Second))
 		}
 	}
 }

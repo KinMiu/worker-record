@@ -196,7 +196,7 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			"-hide_banner",
 			"-loglevel", "warning",
 			"-rtsp_transport", "tcp",
-			"-stimeout", "5000000", // 5 seconds socket timeout in microseconds
+			"-timeout", "5000000", // 5 seconds socket timeout in microseconds (FFmpeg 5+/6+/7+)
 			"-fflags", "+genpts+nobuffer",
 			"-avoid_negative_ts", "make_zero",
 			"-i", rtspURL,

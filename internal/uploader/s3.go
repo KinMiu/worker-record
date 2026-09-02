@@ -139,14 +139,5 @@ func (u *S3Uploader) UploadSegment(ctx context.Context, localFilePath, targetKey
 	log.Printf("[S3] Upload completed: s3://%s/%s (Size: %.2f MB, ETag: %s)",
 		u.cfg.S3Bucket, targetKey, float64(info.Size)/(1024*1024), info.ETag)
 
-	// Optional local file cleanup
-	if u.cfg.S3DeleteLocal {
-		if err := os.Remove(localFilePath); err != nil {
-			log.Printf("[S3][WARNING] Failed to delete local file %s after upload: %v", localFilePath, err)
-		} else {
-			log.Printf("[S3] Local file removed: %s", localFilePath)
-		}
-	}
-
 	return nil
 }

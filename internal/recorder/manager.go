@@ -237,9 +237,12 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			recordedSec = 1
 		}
 
-		// Verify file produced on disk
+		// Minimum threshold to consider a recording valid (ignore <15s and <512KB handshake glitches)
+		minValidDuration := 15 * time.Second
+		minValidSize := int64(512 * 1024) // 512KB minimum
+
 		fileInfo, statErr := os.Stat(filePath)
-		if statErr == nil && fileInfo.Size() > 1024 {
+		if statErr == nil && fileInfo.Size() >= minValidSize && recordedDuration >= minValidDuration {
 			// Chunk is valid and finalized with moov atom: enqueue to upload pool
 			task := uploader.UploadTask{
 				DeviceID:   dev.ID,
@@ -256,9 +259,13 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 				rm.uploadPool.Enqueue(task)
 			}
 		} else {
-			// Clean up stub if empty or corrupt
+			// Clean up stub if empty or below threshold
 			if statErr == nil {
 				_ = os.Remove(filePath)
+				if fileInfo.Size() > 0 {
+					log.Printf("[RECORDER][%s] Discarded micro-fragment '%s' (Size: %.2f KB, Duration: %v)",
+						dev.ID, fileName, float64(fileInfo.Size())/1024.0, recordedDuration.Round(time.Second))
+				}
 			}
 		}
 
@@ -269,7 +276,7 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 		}
 
 		// Determine next step: immediate rollover vs reconnect backoff
-		if err != nil || recordedDuration < 10*time.Second {
+		if err != nil || recordedDuration < 30*time.Second {
 			stderrMsg := strings.TrimSpace(stderrBuf.String())
 			if stderrMsg != "" {
 				log.Printf("[RECORDER][%s][WARNING] FFmpeg error on '%s': %s", dev.ID, dev.Name, stderrMsg)
@@ -285,9 +292,10 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			case <-time.After(retryWait):
 			}
 		} else {
-			// Full chunk recorded cleanly: rollover to next segment immediately
+			// Full chunk recorded cleanly: brief 500ms socket cooldown before dialing next chunk
 			log.Printf("[RECORDER][%s] Chunk '%s' completed successfully (%v). Rollover to next chunk...",
 				dev.ID, fileName, recordedDuration.Round(time.Second))
+			time.Sleep(500 * time.Millisecond)
 		}
 	}
 }

@@ -1,13 +1,14 @@
 package recorder
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -193,17 +194,18 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 		// with movflags=+faststart so browsers and web players can stream & play MP4 segments immediately.
 		args := []string{
 			"-hide_banner",
-			"-loglevel", "warning",
+			"-loglevel", "info",
 			"-rtsp_transport", "tcp",
 			"-timeout", "15000000", // 15 seconds socket timeout in microseconds
-			"-fflags", "+genpts+nobuffer",
-			"-avoid_negative_ts", "make_zero",
+			"-fflags", "+genpts+nobuffer+discardcorrupt",
+			"-flags", "+global_header",
 			"-i", rtspURL,
 			"-map", "0:v:0", // Select first video stream
 			"-map", "0:a?", // Select audio stream if available (do not fail if no audio)
 			"-c:v", "copy", // Copy video track (0% CPU re-encoding)
 			"-c:a", "aac", // Transcode audio to AAC (G.711/PCM to AAC takes <0.1% CPU & supported by all browsers)
 			"-b:a", "64k",
+			"-avoid_negative_ts", "make_zero",
 			"-f", "segment",
 			"-segment_time", fmt.Sprintf("%d", rm.cfg.SegmentDurationSeconds),
 			"-segment_format", "mp4",
@@ -215,10 +217,34 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 
 		cmd := exec.CommandContext(ctx, rm.cfg.FFmpegPath, args...)
 
-		var stderrBuf bytes.Buffer
-		cmd.Stderr = &stderrBuf
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			log.Printf("[RECORDER][%s][ERROR] Failed to obtain stderr pipe: %v", dev.ID, err)
+		}
 
-		err := cmd.Run()
+		if err := cmd.Start(); err != nil {
+			log.Printf("[RECORDER][%s][ERROR] Failed to start FFmpeg: %v", dev.ID, err)
+		} else {
+			if stderrPipe != nil {
+				go func() {
+					scanner := bufio.NewScanner(stderrPipe)
+					for scanner.Scan() {
+						line := scanner.Text()
+						// Log relevant stream detection and error lines
+						if strings.Contains(line, "Stream #") ||
+							strings.Contains(line, "Opening '") ||
+							strings.Contains(line, "error") ||
+							strings.Contains(line, "Error") ||
+							strings.Contains(line, "moov atom") ||
+							strings.Contains(line, "video:") {
+							log.Printf("[FFMPEG][%s] %s", dev.Name, line)
+						}
+					}
+				}()
+			}
+
+			err = cmd.Wait()
+		}
 		duration := time.Since(startTime)
 
 		if ctx.Err() != nil {
@@ -227,10 +253,10 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 		}
 
 		if err != nil {
-			log.Printf("[RECORDER][%s] FFmpeg exited with error after %v: %v | Stderr: %s",
-				dev.ID, duration.Round(time.Second), err, stderrBuf.String())
+			log.Printf("[RECORDER][%s] FFmpeg exited with error after %v: %v",
+				dev.ID, duration.Round(time.Second), err)
 		} else {
-			log.Printf("[RECORDER][%s] FFmpeg process finished after %v", dev.ID, duration.Round(time.Second))
+			log.Printf("[RECORDER][%s] FFmpeg process finished cleanly after %v", dev.ID, duration.Round(time.Second))
 		}
 
 		// Reconnect backoff

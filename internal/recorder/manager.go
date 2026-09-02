@@ -197,7 +197,8 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			"-loglevel", "info",
 			"-rtsp_transport", "tcp",
 			"-timeout", "15000000", // 15 seconds socket timeout in microseconds
-			"-fflags", "+genpts+nobuffer+discardcorrupt",
+			"-buffer_size", "1024000", // 1MB buffer for jitter absorption
+			"-fflags", "+genpts",
 			"-flags", "+global_header",
 			"-i", rtspURL,
 			"-map", "0:v:0", // Select first video stream

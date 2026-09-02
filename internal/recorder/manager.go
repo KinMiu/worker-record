@@ -201,8 +201,9 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			"-i", rtspURL,
 			"-map", "0:v:0", // Select first video stream
 			"-map", "0:a?", // Select audio stream if available (do not fail if no audio)
-			"-c:v", "copy",
-			"-c:a", "copy", // Copy audio stream as-is without CPU overhead
+			"-c:v", "copy", // Copy video track (0% CPU re-encoding)
+			"-c:a", "aac", // Transcode audio to AAC (G.711/PCM to AAC takes <0.1% CPU & supported by all browsers)
+			"-b:a", "64k",
 			"-f", "segment",
 			"-segment_time", fmt.Sprintf("%d", rm.cfg.SegmentDurationSeconds),
 			"-segment_format", "mp4",

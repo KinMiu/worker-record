@@ -203,7 +203,7 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 		log.Printf("[RECORDER][%s] Recording chunk '%s' for '%s' (%ds target)...",
 			dev.ID, fileName, dev.Name, rm.cfg.SegmentDurationSeconds)
 
-		// Discrete FFmpeg process for target duration (-t N) with stream-copy and faststart moov atom
+		// Discrete FFmpeg process for target duration (-t N) with stream-copy, extradata extraction and faststart moov atom
 		args := []string{
 			"-y",
 			"-hide_banner",
@@ -211,14 +211,15 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			"-rtsp_transport", "tcp",
 			"-timeout", "15000000", // 15 seconds socket timeout in microseconds
 			"-buffer_size", "1024000", // 1MB buffer
-			"-fflags", "+genpts",
-			"-flags", "+global_header",
+			"-fflags", "+genpts+discardcorrupt",
 			"-i", rtspURL,
 			"-t", fmt.Sprintf("%d", rm.cfg.SegmentDurationSeconds),
 			"-map", "0:v:0",
 			"-map", "0:a?",
 			"-c:v", "copy",
 			"-c:a", "copy",
+			"-bsf:v", "dump_extra",
+			"-tag:v", "avc1",
 			"-avoid_negative_ts", "make_zero",
 			"-movflags", "+faststart",
 			filePath,

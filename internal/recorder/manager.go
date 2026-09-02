@@ -139,6 +139,14 @@ func (rm *RecorderManager) ActiveRecorderCount() int {
 	return len(rm.runners)
 }
 
+// IsDeviceRecording returns whether a device currently has an active recording runner.
+func (rm *RecorderManager) IsDeviceRecording(deviceID string) bool {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	_, exists := rm.runners[deviceID]
+	return exists
+}
+
 // GetDeviceMap returns a snapshot copy of all currently registered devices.
 func (rm *RecorderManager) GetDeviceMap() map[string]models.Device {
 	rm.mu.RLock()

@@ -221,7 +221,7 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			"-bsf:v", "dump_extra",
 			"-tag:v", "avc1",
 			"-avoid_negative_ts", "make_zero",
-			"-movflags", "+faststart",
+			"-movflags", "+frag_keyframe+empty_moov+default_base_moof",
 			filePath,
 		}
 

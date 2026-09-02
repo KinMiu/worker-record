@@ -42,6 +42,7 @@ func main() {
 	} else {
 		log.Printf("[MAIN] API Auth Token     : [NOT SET]")
 	}
+	log.Printf("[MAIN] RabbitMQ Host      : %s:%d (VHost: %s, User: %s)", cfg.RMQHost, cfg.RMQPort, cfg.RMQVHost, cfg.RMQUser)
 	log.Printf("[MAIN] RabbitMQ URL       : %s", cfg.RabbitMQURL)
 	log.Printf("[MAIN] RabbitMQ Queue     : %s", cfg.RabbitMQQueueName)
 	log.Printf("[MAIN] Record Storage Path: %s", cfg.RecordStoragePath)

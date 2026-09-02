@@ -48,8 +48,13 @@ API_KEY=
 API_AUTH_TOKEN=
 
 # RabbitMQ Broker Configuration
-RABBITMQ_URL=amqp://guest:guest@195.35.23.135:5672/
+RMQ_HOST=195.35.23.135
+RMQ_USER=smk2iot
+RMQ_PASS=smk2iot
+RMQ_PORT=5672
+RMQ_VHOST=/smk2pkl
 RABBITMQ_QUEUE_NAME=cctv.recordings
+RABBITMQ_URL=amqp://smk2iot:smk2iot@195.35.23.135:5672/%2Fsmk2pkl
 
 # Local Storage Path for Segmented MP4 Recordings
 RECORD_STORAGE_PATH=/opt/recordings/queue

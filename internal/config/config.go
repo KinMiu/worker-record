@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/joho/godotenv"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // Config holds all configuration properties for the worker.
@@ -18,6 +19,11 @@ type Config struct {
 	APIKey                 string
 	APIAuthToken           string
 	RabbitMQURL            string
+	RMQHost                string
+	RMQPort                int
+	RMQUser                string
+	RMQPass                string
+	RMQVHost               string
 	RabbitMQQueueName      string
 	RecordStoragePath      string
 	RecordingBaseURL       string
@@ -45,8 +51,28 @@ func Load() (*Config, error) {
 	apiKey := getEnv("API_KEY", "")
 	apiAuthToken := getEnv("API_AUTH_TOKEN", "")
 
-	rabbitmqURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@195.35.23.135:5672/")
-	rabbitmqQueue := getEnv("RABBITMQ_QUEUE_NAME", "cctv.recordings")
+	// RabbitMQ parameters
+	rmqHost := getEnv("RMQ_HOST", getEnv("RABBITMQ_HOST", "195.35.23.135"))
+	rmqPort := getEnvInt("RMQ_PORT", getEnvInt("RABBITMQ_PORT", 5672))
+	rmqUser := getEnv("RMQ_USER", getEnv("RABBITMQ_USER", "smk2iot"))
+	rmqPass := getEnv("RMQ_PASS", getEnv("RABBITMQ_PASS", getEnv("RMQ_PASSWORD", getEnv("RABBITMQ_PASSWORD", "smk2iot"))))
+	rmqVHost := getEnv("RMQ_VHOST", getEnv("RABBITMQ_VHOST", "/smk2pkl"))
+
+	rabbitmqQueue := getEnv("RABBITMQ_QUEUE_NAME", getEnv("RMQ_QUEUE_NAME", "cctv.recordings"))
+
+	// If explicit full URL is set and no RMQ_* override is provided, use it; otherwise construct from parameters
+	rabbitmqURL := getEnv("RABBITMQ_URL", getEnv("RMQ_URL", ""))
+	if rabbitmqURL == "" || hasCustomRMQParams() {
+		uri := amqp.URI{
+			Scheme:   "amqp",
+			Host:     rmqHost,
+			Port:     rmqPort,
+			Username: rmqUser,
+			Password: rmqPass,
+			Vhost:    rmqVHost,
+		}
+		rabbitmqURL = uri.String()
+	}
 
 	recordStoragePath := getEnv("RECORD_STORAGE_PATH", "/opt/recordings/queue")
 	recordingBaseURL := getEnv("RECORDING_BASE_URL", "http://195.35.23.135:9000/recordings")
@@ -76,6 +102,11 @@ func Load() (*Config, error) {
 		APIKey:                 apiKey,
 		APIAuthToken:           apiAuthToken,
 		RabbitMQURL:            rabbitmqURL,
+		RMQHost:                rmqHost,
+		RMQPort:                rmqPort,
+		RMQUser:                rmqUser,
+		RMQPass:                rmqPass,
+		RMQVHost:               rmqVHost,
 		RabbitMQQueueName:      rabbitmqQueue,
 		RecordStoragePath:      recordStoragePath,
 		RecordingBaseURL:       recordingBaseURL,
@@ -85,6 +116,16 @@ func Load() (*Config, error) {
 		EnableS3Upload:         enableS3Upload,
 		FFmpegPath:             ffmpegPath,
 	}, nil
+}
+
+func hasCustomRMQParams() bool {
+	keys := []string{"RMQ_HOST", "RMQ_USER", "RMQ_PASS", "RMQ_PORT", "RMQ_VHOST", "RABBITMQ_HOST", "RABBITMQ_USER", "RABBITMQ_PASS", "RABBITMQ_VHOST"}
+	for _, k := range keys {
+		if val, exists := os.LookupEnv(k); exists && strings.TrimSpace(val) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func getEnv(key, fallback string) string {

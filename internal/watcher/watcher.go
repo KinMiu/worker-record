@@ -175,10 +175,13 @@ func (w *FileWatcher) scanDeviceDirectory(ctx context.Context, deviceID, deviceN
 		isCompleted := false
 
 		// Rule 1: A segment is completed if a newer MP4 file exists in the same folder
+		// (FFmpeg has finalized this segment and moved to the next segment file)
 		if i < len(mp4List)-1 {
 			isCompleted = true
 		} else {
-			// Rule 2: If it is the latest file, check if size and modification time have remained stable
+			// Rule 2: If it is the latest/solitary file, it is ONLY complete if FFmpeg has stopped
+			// writing for a sustained duration (e.g. after stream disconnect / camera offline).
+			// We MUST NOT touch actively recorded files!
 			w.mu.Lock()
 			stat, tracked := w.fileModTracker[f.path]
 			if !tracked {
@@ -188,13 +191,16 @@ func (w *FileWatcher) scanDeviceDirectory(ctx context.Context, deviceID, deviceN
 					seenAt:  now,
 				}
 			} else {
-				// If size has not changed for at least (ScanInterval + 5) seconds
 				stagnantDuration := now.Sub(stat.seenAt)
-				if stat.size == f.size && stagnantDuration >= time.Duration(w.cfg.ScanIntervalSeconds+5)*time.Second {
+				fileAge := now.Sub(f.modTime)
+
+				// Solitary file is only considered complete if it has not changed for >= 30s
+				// AND its last modification was >= 30s ago (ensuring FFmpeg is definitely closed)
+				if stat.size == f.size && stagnantDuration >= 30*time.Second && fileAge >= 30*time.Second {
 					isCompleted = true
 					delete(w.fileModTracker, f.path)
-				} else if stat.size != f.size {
-					// File is still being actively written, update size and timestamp
+				} else if stat.size != f.size || !f.modTime.Equal(stat.modTime) {
+					// File is still being actively written, update tracking
 					w.fileModTracker[f.path] = fileStatInfo{
 						size:    f.size,
 						modTime: f.modTime,

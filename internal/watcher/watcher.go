@@ -179,46 +179,29 @@ func (w *FileWatcher) scanDeviceDirectory(ctx context.Context, deviceID, deviceN
 		if i < len(mp4List)-1 {
 			isCompleted = true
 		} else {
-			// Rule 2: If it is the latest/solitary file, it is ONLY complete if:
-			// 1. The recorder for this device is NOT active (e.g. camera turned off / stopped), OR
-			// 2. The file is genuinely stagnant and older than (SegmentDuration + 60s).
-			// We MUST NEVER touch actively recorded files while FFmpeg is running!
-			w.mu.Lock()
-			stat, tracked := w.fileModTracker[f.path]
-			if !tracked {
-				w.fileModTracker[f.path] = fileStatInfo{
-					size:    f.size,
-					modTime: f.modTime,
-					seenAt:  now,
-				}
-			} else {
-				stagnantDuration := now.Sub(stat.seenAt)
-				fileAge := now.Sub(f.modTime)
-				isRecorderActive := w.recorderMgr != nil && w.recorderMgr.IsDeviceRecording(deviceID)
-
-				if !isRecorderActive {
-					// Camera/recorder is stopped: upload residual file after 15s of quiescence
+			// Rule 2: The latest/solitary file is being actively written by FFmpeg.
+			// It is ONLY considered complete if the device recorder is INACTIVE (camera stopped/disconnected)
+			// AND the file has had no activity for >= 15 seconds.
+			isRecorderActive := w.recorderMgr != nil && w.recorderMgr.IsDeviceRecording(deviceID)
+			if !isRecorderActive {
+				w.mu.Lock()
+				stat, tracked := w.fileModTracker[f.path]
+				if !tracked {
+					w.fileModTracker[f.path] = fileStatInfo{
+						size:    f.size,
+						modTime: f.modTime,
+						seenAt:  now,
+					}
+				} else {
+					stagnantDuration := now.Sub(stat.seenAt)
+					fileAge := now.Sub(f.modTime)
 					if stat.size == f.size && stagnantDuration >= 15*time.Second && fileAge >= 15*time.Second {
 						isCompleted = true
 						delete(w.fileModTracker, f.path)
 					}
-				} else {
-					// Recorder is actively running: the active file MUST NEVER be touched.
-					// Only complete if abandoned for longer than full segment duration + 60s
-					maxWait := time.Duration(w.cfg.SegmentDurationSeconds+60) * time.Second
-					if stat.size == f.size && stagnantDuration >= maxWait && fileAge >= maxWait {
-						isCompleted = true
-						delete(w.fileModTracker, f.path)
-					} else if stat.size != f.size || !f.modTime.Equal(stat.modTime) {
-						w.fileModTracker[f.path] = fileStatInfo{
-							size:    f.size,
-							modTime: f.modTime,
-							seenAt:  now,
-						}
-					}
 				}
+				w.mu.Unlock()
 			}
-			w.mu.Unlock()
 		}
 
 		if isCompleted {

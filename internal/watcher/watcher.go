@@ -246,7 +246,16 @@ func (w *FileWatcher) handleCompletedSegment(
 		CreatedAt:  createdAtISO,
 	}
 
-	// 1. Publish event to RabbitMQ
+	// 1. Upload segment to S3 / MinIO Storage (if enabled)
+	if w.cfg.EnableS3Upload {
+		s3Key := fmt.Sprintf("%s/%s", deviceID, fileName)
+		if err := w.s3Uploader.UploadSegment(ctx, filePath, s3Key); err != nil {
+			log.Printf("[WATCHER][ERROR] Failed to upload %s to S3/MinIO: %v. Will retry on next scan.", fileName, err)
+			return
+		}
+	}
+
+	// 2. Publish event to RabbitMQ
 	if err := w.rmqPublisher.PublishRecordingCompleted(ctx, event); err != nil {
 		log.Printf("[WATCHER][ERROR] Failed to publish recording event for %s: %v. Will retry on next scan.", fileName, err)
 		return
@@ -260,14 +269,4 @@ func (w *FileWatcher) handleCompletedSegment(
 
 	log.Printf("[WATCHER] Segment verified & published: %s (Device: %s, Size: %.2f MB)",
 		fileName, deviceName, float64(size)/(1024*1024))
-
-	// 2. Optional S3 Upload trigger
-	if w.cfg.EnableS3Upload {
-		s3Key := fmt.Sprintf("%s/%s", deviceID, fileName)
-		go func() {
-			if err := w.s3Uploader.UploadSegment(context.Background(), filePath, s3Key); err != nil {
-				log.Printf("[WATCHER][ERROR] S3 upload error for %s: %v", fileName, err)
-			}
-		}()
-	}
 }

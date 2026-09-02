@@ -223,11 +223,11 @@ func (w *FileWatcher) handleCompletedSegment(
 	size int64,
 	modTime time.Time,
 ) {
-	// Parse timestamp from filename (format: 2006-01-02_15-04-05.mp4)
+	// Parse timestamp from filename (format: 2006-01-02_15-04-05.mp4 - FFmpeg writes UTC timestamps)
 	baseName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
-	parsedTime, err := time.ParseInLocation("2006-01-02_15-04-05", baseName, time.Local)
+	parsedTime, err := time.ParseInLocation("2006-01-02_15-04-05", baseName, time.UTC)
 	if err != nil {
-		parsedTime = modTime
+		parsedTime = modTime.UTC()
 	}
 
 	createdAtISO := parsedTime.UTC().Format(time.RFC3339Nano)

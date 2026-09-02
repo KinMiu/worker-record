@@ -190,21 +190,23 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			dev.ID, rm.cfg.SegmentDurationSeconds, rtspURL)
 
 		// FFmpeg pass-through segmented MP4 (-c copy, 0% CPU re-encoding overhead)
-		// ffmpeg -loglevel warning -rtsp_transport tcp -stimeout 5000000 -fflags +genpts+nobuffer -avoid_negative_ts make_zero
-		//        -i <rtspEndpoint> -c copy -f segment -segment_time 300 -segment_format mp4 -reset_timestamps 1 -strftime 1 <output_pattern>
+		// with movflags=+faststart so browsers and web players can stream & play MP4 segments immediately.
 		args := []string{
 			"-hide_banner",
 			"-loglevel", "warning",
 			"-rtsp_transport", "tcp",
-			"-timeout", "5000000", // 5 seconds socket timeout in microseconds (FFmpeg 5+/6+/7+)
+			"-stimeout", "15000000", // 15 seconds socket timeout in microseconds
 			"-fflags", "+genpts+nobuffer",
 			"-avoid_negative_ts", "make_zero",
 			"-i", rtspURL,
+			"-map", "0:v:0", // Select first video stream
+			"-map", "0:a?", // Select audio stream if available (do not fail if no audio)
 			"-c:v", "copy",
-			"-c:a", "aac",
+			"-c:a", "copy", // Copy audio stream as-is without CPU overhead
 			"-f", "segment",
 			"-segment_time", fmt.Sprintf("%d", rm.cfg.SegmentDurationSeconds),
 			"-segment_format", "mp4",
+			"-segment_format_options", "movflags=+faststart",
 			"-reset_timestamps", "1",
 			"-strftime", "1",
 			outputPattern,

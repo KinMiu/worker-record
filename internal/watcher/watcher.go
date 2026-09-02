@@ -263,7 +263,7 @@ func (w *FileWatcher) handleCompletedSegment(
 
 	// 2. Optional S3 Upload trigger
 	if w.cfg.EnableS3Upload {
-		s3Key := fmt.Sprintf("recordings/%s/%s", deviceID, fileName)
+		s3Key := fmt.Sprintf("%s/%s", deviceID, fileName)
 		go func() {
 			if err := w.s3Uploader.UploadSegment(context.Background(), filePath, s3Key); err != nil {
 				log.Printf("[WATCHER][ERROR] S3 upload error for %s: %v", fileName, err)

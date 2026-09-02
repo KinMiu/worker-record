@@ -31,6 +31,13 @@ type Config struct {
 	ScanIntervalSeconds    int
 	RetryIntervalSeconds   int
 	EnableS3Upload         bool
+	S3Endpoint             string
+	S3AccessKey            string
+	S3SecretKey            string
+	S3Bucket               string
+	S3Region               string
+	S3UseSSL               bool
+	S3DeleteLocal          bool
 	FFmpegPath             string
 }
 
@@ -93,6 +100,14 @@ func Load() (*Config, error) {
 	}
 
 	enableS3Upload := getEnvBool("ENABLE_S3_UPLOAD", false)
+	s3Endpoint := getEnv("S3_ENDPOINT", "195.35.23.135:9000")
+	s3AccessKey := getEnv("S3_ACCESS_KEY", "19421076")
+	s3SecretKey := getEnv("S3_SECRET_KEY", "S3PsT1Ubl")
+	s3Bucket := getEnv("S3_BUCKET", "recordings")
+	s3Region := getEnv("S3_REGION", "us-east-1")
+	s3UseSSL := getEnvBool("S3_USE_SSL", false)
+	s3DeleteLocal := getEnvBool("S3_DELETE_LOCAL_AFTER_UPLOAD", false)
+
 	ffmpegPath := getEnv("FFMPEG_PATH", "ffmpeg")
 
 	return &Config{
@@ -114,6 +129,13 @@ func Load() (*Config, error) {
 		ScanIntervalSeconds:    scanInterval,
 		RetryIntervalSeconds:   retryInterval,
 		EnableS3Upload:         enableS3Upload,
+		S3Endpoint:             s3Endpoint,
+		S3AccessKey:            s3AccessKey,
+		S3SecretKey:            s3SecretKey,
+		S3Bucket:               s3Bucket,
+		S3Region:               s3Region,
+		S3UseSSL:               s3UseSSL,
+		S3DeleteLocal:          s3DeleteLocal,
 		FFmpegPath:             ffmpegPath,
 	}, nil
 }

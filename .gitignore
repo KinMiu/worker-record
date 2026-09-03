@@ -1,7 +1,10 @@
 # Binaries
-worker-record
-worker-record.exe
-worker-record-linux
+/worker
+/worker-linux
+/worker-record
+/worker-record.exe
+/worker-record-linux
+worker.exe
 *.exe
 *.exe~
 *.dll

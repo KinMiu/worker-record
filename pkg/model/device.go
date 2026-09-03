@@ -1,15 +1,15 @@
-package models
+package model
 
 import "strings"
 
-// User represents the associated user data from the backend schema.
+// User represents the associated user metadata from the backend schema.
 type User struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Email string `json:"email"`
 }
 
-// Device represents the camera / CCTV device model from the central backend.
+// Device represents the camera/CCTV device entity.
 type Device struct {
 	ID               string   `json:"id"`
 	Name             string   `json:"name"`
@@ -27,7 +27,6 @@ type Device struct {
 }
 
 // GetEffectiveRTSPURL returns the RTSP streaming endpoint.
-// Prioritizes rtspEndpoint, falling back to source_url.
 func (d *Device) GetEffectiveRTSPURL() string {
 	if strings.TrimSpace(d.RTSPEndpoint) != "" {
 		return strings.TrimSpace(d.RTSPEndpoint)
@@ -35,8 +34,7 @@ func (d *Device) GetEffectiveRTSPURL() string {
 	return strings.TrimSpace(d.SourceURL)
 }
 
-// IsDeviceActive checks if the device is active.
-// Defaults to true if isActive is not explicitly provided.
+// IsDeviceActive checks if the device is active (defaults to true if omitted).
 func (d *Device) IsDeviceActive() bool {
 	if d.IsActive != nil {
 		return *d.IsActive
@@ -44,25 +42,17 @@ func (d *Device) IsDeviceActive() bool {
 	return true
 }
 
-// APIResponse represents the standard REST API envelope from the backend.
-type APIResponse struct {
-	Status  string   `json:"status,omitempty"`
-	Message string   `json:"message,omitempty"`
-	Data    []Device `json:"data"`
+// HealthStatus represents the payload returned by the health check endpoint.
+type HealthStatus struct {
+	Status          string `json:"status"`
+	WorkerID        string `json:"worker_id"`
+	ActiveRecorders int    `json:"active_recorders"`
+	RMQConnected    bool   `json:"rmq_connected"`
+	S3UploadEnabled bool   `json:"s3_upload_enabled"`
+	Uptime          string `json:"uptime"`
 }
 
-// RecordingCompletedEvent represents the RabbitMQ message payload published
-// when a 5-minute segmented MP4 file completes recording.
-// Schema aligns 1:1 with Prisma backend Recording model.
-type RecordingCompletedEvent struct {
-	Event      string `json:"event"`
-	DeviceID   string `json:"deviceId"`
-	DeviceName string `json:"deviceName"`
-	MacAddress string `json:"macAddress"`
-	FileName   string `json:"fileName"`
-	Path       string `json:"path"`
-	URL        string `json:"url"`
-	Size       int64  `json:"size"`
-	Duration   int    `json:"duration"`
-	CreatedAt  string `json:"createdAt"`
+// HealthStatusResponse provides a concrete envelope for Swagger documentation.
+type HealthStatusResponse struct {
+	ResponseEntity[HealthStatus]
 }

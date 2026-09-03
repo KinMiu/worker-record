@@ -1,10 +1,9 @@
-package recorder
+package service
 
 import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,20 +11,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/KinMiu/worker-record/internal/config"
-	"github.com/KinMiu/worker-record/internal/models"
-	"github.com/KinMiu/worker-record/internal/uploader"
+	"github.com/gofiber/fiber/v2/log"
+
+	"github.com/KinMiu/worker-record/config"
+	"github.com/KinMiu/worker-record/pkg/model"
 )
 
 type deviceRunner struct {
-	device models.Device
+	device model.Device
 	cancel context.CancelFunc
 }
 
-// RecorderManager coordinates concurrent Direct Chunk FFmpeg recording processes for active cameras.
-type RecorderManager struct {
-	cfg        *config.Config
-	uploadPool *uploader.UploadPool
+// RecorderManagerService coordinates concurrent Direct Chunk FFmpeg recording processes for active cameras.
+type RecorderManagerService struct {
+	uploadPool *UploadPoolService
 	mu         sync.RWMutex
 	runners    map[string]*deviceRunner
 	rootCtx    context.Context
@@ -33,11 +32,10 @@ type RecorderManager struct {
 	wg         sync.WaitGroup
 }
 
-// NewRecorderManager initializes a new RecorderManager wired to the async upload pool.
-func NewRecorderManager(cfg *config.Config, uploadPool *uploader.UploadPool) *RecorderManager {
+// NewRecorderManagerService initializes a new RecorderManagerService wired to the async upload pool.
+func NewRecorderManagerService(uploadPool *UploadPoolService) *RecorderManagerService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &RecorderManager{
-		cfg:        cfg,
+	return &RecorderManagerService{
 		uploadPool: uploadPool,
 		runners:    make(map[string]*deviceRunner),
 		rootCtx:    ctx,
@@ -46,7 +44,7 @@ func NewRecorderManager(cfg *config.Config, uploadPool *uploader.UploadPool) *Re
 }
 
 // UpsertDevice starts or restarts a recording runner for the specified device.
-func (rm *RecorderManager) UpsertDevice(dev models.Device) {
+func (rm *RecorderManagerService) UpsertDevice(dev model.Device) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -58,7 +56,7 @@ func (rm *RecorderManager) UpsertDevice(dev models.Device) {
 	// If device is inactive or RTSP URL is missing, stop runner if active
 	if !isActive || rtspURL == "" {
 		if exists {
-			log.Printf("[RECORDER] Device %s (%s) is inactive/missing URL. Stopping recorder...", dev.ID, dev.Name)
+			log.Infof("[RECORDER] Device %s (%s) is inactive/missing URL. Stopping recorder...", dev.ID, dev.Name)
 			existing.cancel()
 			delete(rm.runners, dev.ID)
 		}
@@ -73,19 +71,18 @@ func (rm *RecorderManager) UpsertDevice(dev models.Device) {
 			return
 		}
 
-		log.Printf("[RECORDER] Device %s (%s) configuration changed. Restarting recorder...", dev.ID, dev.Name)
+		log.Infof("[RECORDER] Device %s (%s) configuration changed. Restarting recorder...", dev.ID, dev.Name)
 		existing.cancel()
 		delete(rm.runners, dev.ID)
 	}
 
-	// Ensure destination directory exists
-	deviceStorageDir := filepath.Join(rm.cfg.RecordStoragePath, dev.ID)
+	recordStoragePath := config.RECORD_STORAGE_PATH.GetValueOrDefault("/opt/recordings/queue")
+	deviceStorageDir := filepath.Join(recordStoragePath, dev.ID)
 	if err := os.MkdirAll(deviceStorageDir, 0755); err != nil {
-		log.Printf("[RECORDER][ERROR] Failed to create storage directory %s: %v", deviceStorageDir, err)
+		log.Errorf("[RECORDER] Failed to create storage directory %s: %v", deviceStorageDir, err)
 		return
 	}
 
-	// Spawn new recording goroutine
 	devCtx, devCancel := context.WithCancel(rm.rootCtx)
 	rm.runners[dev.ID] = &deviceRunner{
 		device: dev,
@@ -97,20 +94,20 @@ func (rm *RecorderManager) UpsertDevice(dev models.Device) {
 }
 
 // RemoveDevice halts and cleans up a device's recording process.
-func (rm *RecorderManager) RemoveDevice(deviceID string) {
+func (rm *RecorderManagerService) RemoveDevice(deviceID string) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	if runner, exists := rm.runners[deviceID]; exists {
-		log.Printf("[RECORDER] Removing recorder for device %s (%s)...", deviceID, runner.device.Name)
+		log.Infof("[RECORDER] Removing recorder for device %s (%s)...", deviceID, runner.device.Name)
 		runner.cancel()
 		delete(rm.runners, deviceID)
 	}
 }
 
 // ReconcileDevices reconciles running recording sessions with the latest device list.
-func (rm *RecorderManager) ReconcileDevices(devices []models.Device) {
-	newMap := make(map[string]models.Device)
+func (rm *RecorderManagerService) ReconcileDevices(devices []model.Device) {
+	newMap := make(map[string]model.Device)
 	for _, dev := range devices {
 		newMap[dev.ID] = dev
 	}
@@ -132,39 +129,19 @@ func (rm *RecorderManager) ReconcileDevices(devices []models.Device) {
 		rm.UpsertDevice(dev)
 	}
 
-	log.Printf("[RECORDER] Reconciled devices. Currently recording %d active camera(s)", rm.ActiveRecorderCount())
+	log.Infof("[RECORDER] Reconciled devices. Currently recording %d active camera(s)", rm.ActiveRecorderCount())
 }
 
 // ActiveRecorderCount returns the number of currently active recording runners.
-func (rm *RecorderManager) ActiveRecorderCount() int {
+func (rm *RecorderManagerService) ActiveRecorderCount() int {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return len(rm.runners)
 }
 
-// IsDeviceRecording returns whether a device currently has an active recording runner.
-func (rm *RecorderManager) IsDeviceRecording(deviceID string) bool {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	_, exists := rm.runners[deviceID]
-	return exists
-}
-
-// GetDeviceMap returns a snapshot copy of all currently registered devices.
-func (rm *RecorderManager) GetDeviceMap() map[string]models.Device {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-
-	copyMap := make(map[string]models.Device, len(rm.runners))
-	for id, runner := range rm.runners {
-		copyMap[id] = runner.device
-	}
-	return copyMap
-}
-
 // StopAll stops all active recorders and waits for child processes to exit.
-func (rm *RecorderManager) StopAll() {
-	log.Println("[RECORDER] Stopping all camera recorders...")
+func (rm *RecorderManagerService) StopAll() {
+	log.Info("[RECORDER] Stopping all camera recorders...")
 	rm.rootCancel()
 
 	rm.mu.Lock()
@@ -175,23 +152,26 @@ func (rm *RecorderManager) StopAll() {
 	rm.mu.Unlock()
 
 	rm.wg.Wait()
-	log.Println("[RECORDER] All camera recorders stopped cleanly.")
+	log.Info("[RECORDER] All camera recorders stopped cleanly.")
 }
 
-// runDeviceLoop manages sequential discrete 5-minute chunk recording with zero gap and auto-reconnect.
-func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device) {
+func (rm *RecorderManagerService) runDeviceLoop(ctx context.Context, dev model.Device) {
 	defer rm.wg.Done()
 
 	rtspURL := dev.GetEffectiveRTSPURL()
-	deviceStorageDir := filepath.Join(rm.cfg.RecordStoragePath, dev.ID)
+	recordStoragePath := config.RECORD_STORAGE_PATH.GetValueOrDefault("/opt/recordings/queue")
+	deviceStorageDir := filepath.Join(recordStoragePath, dev.ID)
+	segmentDuration := config.SEGMENT_DURATION_SECONDS.GetValueInt(300)
+	ffmpegPath := config.FFMPEG_PATH.GetValueOrDefault("ffmpeg")
+	retrySecs := config.RETRY_INTERVAL_SECONDS.GetValueInt(5)
 
-	log.Printf("[RECORDER][%s] Direct Chunk Recorder initialized for '%s' (Chunk: %ds, Source: %s)",
-		dev.ID, dev.Name, rm.cfg.SegmentDurationSeconds, rtspURL)
+	log.Infof("[RECORDER][%s] Direct Chunk Recorder initialized for '%s' (Chunk: %ds, Source: %s)",
+		dev.ID, dev.Name, segmentDuration, rtspURL)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[RECORDER][%s] Recorder loop stopped for '%s'", dev.ID, dev.Name)
+			log.Infof("[RECORDER][%s] Recorder loop stopped for '%s'", dev.ID, dev.Name)
 			return
 		default:
 		}
@@ -200,20 +180,19 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 		fileName := fmt.Sprintf("%s.mp4", nowUTC.Format("2006-01-02_15-04-05"))
 		filePath := filepath.Join(deviceStorageDir, fileName)
 
-		log.Printf("[RECORDER][%s] Recording chunk '%s' for '%s' (%ds target)...",
-			dev.ID, fileName, dev.Name, rm.cfg.SegmentDurationSeconds)
+		log.Infof("[RECORDER][%s] Recording chunk '%s' for '%s' (%ds target)...",
+			dev.ID, fileName, dev.Name, segmentDuration)
 
-		// Discrete FFmpeg process for target duration (-t N) with stream-copy, extradata extraction and faststart moov atom
 		args := []string{
 			"-y",
 			"-hide_banner",
 			"-loglevel", "warning",
 			"-rtsp_transport", "tcp",
-			"-timeout", "15000000", // 15 seconds socket timeout in microseconds
-			"-buffer_size", "1024000", // 1MB buffer
+			"-timeout", "15000000",
+			"-buffer_size", "1024000",
 			"-fflags", "+genpts+discardcorrupt",
 			"-i", rtspURL,
-			"-t", fmt.Sprintf("%d", rm.cfg.SegmentDurationSeconds),
+			"-t", fmt.Sprintf("%d", segmentDuration),
 			"-map", "0:v:0",
 			"-map", "0:a?",
 			"-c:v", "copy",
@@ -225,7 +204,7 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			filePath,
 		}
 
-		cmd := exec.CommandContext(ctx, rm.cfg.FFmpegPath, args...)
+		cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 		var stderrBuf bytes.Buffer
 		cmd.Stderr = &stderrBuf
 
@@ -237,14 +216,12 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			recordedSec = 1
 		}
 
-		// Minimum threshold to consider a recording valid (ignore <15s and <512KB handshake glitches)
 		minValidDuration := 15 * time.Second
 		minValidSize := int64(512 * 1024) // 512KB minimum
 
 		fileInfo, statErr := os.Stat(filePath)
 		if statErr == nil && fileInfo.Size() >= minValidSize && recordedDuration >= minValidDuration {
-			// Chunk is valid and finalized with moov atom: enqueue to upload pool
-			task := uploader.UploadTask{
+			task := UploadTask{
 				DeviceID:   dev.ID,
 				DeviceName: dev.Name,
 				MacAddress: dev.MacAddress,
@@ -259,31 +236,28 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 				rm.uploadPool.Enqueue(task)
 			}
 		} else {
-			// Clean up stub if empty or below threshold
 			if statErr == nil {
 				_ = os.Remove(filePath)
 				if fileInfo.Size() > 0 {
-					log.Printf("[RECORDER][%s] Discarded micro-fragment '%s' (Size: %.2f KB, Duration: %v)",
+					log.Infof("[RECORDER][%s] Discarded micro-fragment '%s' (Size: %.2f KB, Duration: %v)",
 						dev.ID, fileName, float64(fileInfo.Size())/1024.0, recordedDuration.Round(time.Second))
 				}
 			}
 		}
 
-		// Handle shutdown
 		if ctx.Err() != nil {
-			log.Printf("[RECORDER][%s] Recorder context cancelled during '%s'", dev.ID, fileName)
+			log.Infof("[RECORDER][%s] Recorder context cancelled during '%s'", dev.ID, fileName)
 			return
 		}
 
-		// Determine next step: immediate rollover vs reconnect backoff
 		if err != nil || recordedDuration < 30*time.Second {
 			stderrMsg := strings.TrimSpace(stderrBuf.String())
 			if stderrMsg != "" {
-				log.Printf("[RECORDER][%s][WARNING] FFmpeg error on '%s': %s", dev.ID, dev.Name, stderrMsg)
+				log.Warnf("[RECORDER][%s] FFmpeg error on '%s': %s", dev.ID, dev.Name, stderrMsg)
 			}
 
-			retryWait := time.Duration(rm.cfg.RetryIntervalSeconds) * time.Second
-			log.Printf("[RECORDER][%s] Camera '%s' disconnected/errored after %v. Reconnecting in %v...",
+			retryWait := time.Duration(retrySecs) * time.Second
+			log.Infof("[RECORDER][%s] Camera '%s' disconnected/errored after %v. Reconnecting in %v...",
 				dev.ID, dev.Name, recordedDuration.Round(time.Second), retryWait)
 
 			select {
@@ -292,8 +266,7 @@ func (rm *RecorderManager) runDeviceLoop(ctx context.Context, dev models.Device)
 			case <-time.After(retryWait):
 			}
 		} else {
-			// Full chunk recorded cleanly: brief 500ms socket cooldown before dialing next chunk
-			log.Printf("[RECORDER][%s] Chunk '%s' completed successfully (%v). Rollover to next chunk...",
+			log.Infof("[RECORDER][%s] Chunk '%s' completed successfully (%v). Rollover to next chunk...",
 				dev.ID, fileName, recordedDuration.Round(time.Second))
 			time.Sleep(500 * time.Millisecond)
 		}

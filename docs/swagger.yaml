@@ -1,0 +1,82 @@
+basePath: /
+definitions:
+  model.HealthStatus:
+    properties:
+      active_recorders:
+        type: integer
+      rmq_connected:
+        type: boolean
+      s3_upload_enabled:
+        type: boolean
+      status:
+        type: string
+      uptime:
+        type: string
+      worker_id:
+        type: string
+    type: object
+  model.HealthStatusResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/model.HealthStatus'
+      message:
+        type: string
+      meta:
+        $ref: '#/definitions/model.MetaPagination'
+      status:
+        type: boolean
+    type: object
+  model.MetaPagination:
+    properties:
+      limit:
+        type: integer
+      page:
+        type: integer
+      totalData:
+        type: integer
+      totalPage:
+        type: integer
+    type: object
+  model.ResponseError-string:
+    properties:
+      code:
+        type: integer
+      data:
+        type: string
+      message:
+        type: string
+      meta:
+        $ref: '#/definitions/model.MetaPagination'
+      path:
+        type: string
+      status:
+        type: boolean
+    type: object
+info:
+  contact: {}
+  description: Direct Chunk CCTV Recorder & Event Publisher Worker for Way Kambas
+    Wildlife Surveillance System
+  title: Worker Record RTSP Direct Chunk Recorder API
+  version: "1.0"
+paths:
+  /api/v1/health:
+    get:
+      description: Returns operational metrics, active recorder count, and RabbitMQ
+        connectivity status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Worker recorder is healthy
+          schema:
+            $ref: '#/definitions/model.HealthStatusResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.ResponseError-string'
+      summary: Check worker recorder health status
+      tags:
+      - Health
+swagger: "2.0"

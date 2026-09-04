@@ -40,6 +40,11 @@ const (
 	S3_USE_SSL                   EnvKey = "S3_USE_SSL"
 	S3_DELETE_LOCAL_AFTER_UPLOAD EnvKey = "S3_DELETE_LOCAL_AFTER_UPLOAD"
 	FFMPEG_PATH                  EnvKey = "FFMPEG_PATH"
+	MQTT_BROKER                  EnvKey = "MQTT_BROKER"
+	MQTT_CLIENT_ID               EnvKey = "MQTT_CLIENT_ID"
+	MQTT_USERNAME                EnvKey = "MQTT_USERNAME"
+	MQTT_PASSWORD                EnvKey = "MQTT_PASSWORD"
+	MQTT_CAMERA_TOPIC            EnvKey = "MQTT_CAMERA_TOPIC"
 )
 
 // LoadEnv loads environment variables from .env if present.

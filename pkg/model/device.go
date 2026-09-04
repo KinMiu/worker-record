@@ -17,6 +17,7 @@ type Device struct {
 	RTSPEndpoint     string   `json:"rtspEndpoint"`
 	MediamtxEndpoint *string  `json:"mediamtxEndpoint,omitempty"`
 	SourceURL        string   `json:"source_url,omitempty"`
+	TargetURL        string   `json:"target_url,omitempty"`
 	IsActive         *bool    `json:"is_active,omitempty"`
 	Latitude         *float64 `json:"latitude,omitempty"`
 	Longitude        *float64 `json:"longitude,omitempty"`

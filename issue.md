@@ -16,7 +16,7 @@ Gunakan library `github.com/joho/godotenv` untuk membaca variabel:
 - `API_BASE_URL` (contoh: `"https://api-kamera.psti-ubl.id/devices"`)
 - `API_KEY_HEADER` (default: `"x-api-key"`)
 - `API_AUTH_TOKEN` (Token autentikasi ke REST API)
-- `RABBITMQ_URL` (contoh: `"amqp://guest:guest@195.35.23.135:5672/"`)
+- `RABBITMQ_URL` (contoh: `"amqp://guest:guest@127.0.0.1:5672/"`)
 - `RABBITMQ_QUEUE_NAME` (default: `"cctv.recordings"`)
 - `RECORD_STORAGE_PATH` (default: `"/opt/recordings/queue"`)
 - `SEGMENT_DURATION_SECONDS` (default: `300` / 5 menit)
@@ -35,8 +35,8 @@ Gunakan library `github.com/joho/godotenv` untuk membaca variabel:
         "id": "836bf517-4159-4c7e-a994-f64d475c7c00",
         "name": "Kamera Pos 1",
         "macAddress": "F7:BC:FF:A9:F7:52",
-        "rtspEndpoint": "rtsp://lab_cam:19421076@192.168.7.25:554/stream1",
-        "mediamtxEndpoint": "rtsp://195.35.23.135:8554/lab_cam_1",
+        "rtspEndpoint": "rtsp://camera_user:camera_pass@192.168.1.100:554/stream1",
+        "mediamtxEndpoint": "rtsp://127.0.0.1:8554/lab_cam_1",
         "latitude": -5.37954,
         "longitude": 105.234,
         "createdAt": "2026-08-31T15:50:52.189Z",
@@ -75,7 +75,7 @@ Gunakan library `github.com/joho/godotenv` untuk membaca variabel:
     "macAddress": "F7:BC:FF:A9:F7:52",
     "fileName": "2026-09-01_23-05-00.mp4",
     "path": "/opt/recordings/queue/836bf517-4159-4c7e-a994-f64d475c7c00/2026-09-01_23-05-00.mp4",
-    "url": "http://195.35.23.135:9000/recordings/836bf517-4159-4c7e-a994-f64d475c7c00/2026-09-01_23-05-00.mp4",
+    "url": "http://127.0.0.1:9000/recordings/836bf517-4159-4c7e-a994-f64d475c7c00/2026-09-01_23-05-00.mp4",
     "size": 48291040,
     "duration": 300,
     "createdAt": "2026-09-01T23:05:00.000Z"
